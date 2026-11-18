@@ -1,0 +1,12 @@
+{
+  "name": "downloader",
+  "type": "module",
+  "version": "1.0.0",
+  "description": "Замер скорости скачивания по URL",
+  "main": "src/index.js",
+  "scripts": {
+    "start": "node ./src/index"
+  },
+  "author": "Stepan Lomkov, TG: @stepanlomkov",
+  "license": "ISC"
+}
