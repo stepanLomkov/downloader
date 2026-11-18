@@ -23,13 +23,12 @@ import { fmtBytes, fmtSpeed, padL, renderBar } from './format.js';
  * throttle'ится до LIVE_REFRESH_MS, чтобы не жечь CPU.
  *
  * @param {URL} url        — целевой адрес
- * @param {http.Agent} agent — keep-alive агент
  * @param {number} idx     — номер итерации (для отображения #N)
  * @returns {Promise<{idx:number, bytes:number, contentLength:number,
  *                    totalMs:number, ttfbMs:number, downloadMs:number}>}
  * @throws {Error} если статус не 200 или сеть упала
  */
-export async function measureOnce(url, agent, idx) {
+export async function measureOnce(url, idx) {
   // t0 = момент старта запроса (до DNS/TCP/TLS)
   const t0 = performance.now();
 
@@ -39,7 +38,7 @@ export async function measureOnce(url, agent, idx) {
   // Сколько байт тела реально прочитали (сумма длин чанков)
   let bytes = 0;
 
-  const res = await httpGet(url, agent);
+  const res = await httpGet(url);
 
   // Нас интересует только 200 OK — остальное считаем ошибкой запроса
   if (res.statusCode !== 200) {

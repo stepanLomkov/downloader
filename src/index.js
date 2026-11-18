@@ -13,7 +13,7 @@
 
 import { EXIT_BAD_ARGS, EXIT_FATAL, EXIT_INTERRUPTED } from './config.js';
 import { parseArgs } from './cli.js';
-import { createAgent } from './http.js';
+import { destroyAgents  } from './http.js';
 import { measureOnce } from './measure.js';
 import { printError, printHeader, printRow, printSummary } from './render.js';
 import { CLEAR_LINE, HIDE_CURSOR, SHOW_CURSOR, isTTY, red } from './colors.js';
@@ -34,15 +34,13 @@ async function main() {
     process.exit(EXIT_BAD_ARGS);
   }
 
-  // ── 2. Keep-alive agent под протокол URL ───────────────────────────────
-  const agent = createAgent(targetUrl);
-
-  // ── 3. Шапка ───────────────────────────────────────────────────────────
+  // ── 2. Шапка ───────────────────────────────────────────────────────────
   printHeader(targetUrl, n);
 
-  // ── 4. Обработчик Ctrl+C, пока идут замеры ────────────────────────────
+  // ── 3. Обработчик Ctrl+C, пока идут замеры ────────────────────────────
   const onSignal = () => {
     if (isTTY) process.stdout.write(SHOW_CURSOR);
+    destroyAgents()
     console.log('\n  ' + red('Прервано.'));
     process.exit(EXIT_INTERRUPTED);
   };
@@ -51,13 +49,13 @@ async function main() {
   // Скрываем курсор на время работы — вернём перед сводкой/выходом
   if (isTTY) process.stdout.write(HIDE_CURSOR);
 
-  // ── 5. Цикл последовательных замеров ──────────────────────────────────
+  // ── 4. Цикл последовательных замеров ──────────────────────────────────
   const results = []; // успешные измерения
   const errors = [];  // неуспешные: { idx, message }
 
   for (let i = 1; i <= n; i++) {
     try {
-      const r = await measureOnce(targetUrl, agent, i);
+      const r = await measureOnce(targetUrl, i);
       results.push(r);
       printRow(r);
     } catch (e) {
@@ -67,14 +65,14 @@ async function main() {
     }
   }
 
-  // ── 6. Восстанавливаем терминал и снимаем обработчик ──────────────────
+  // ── 5. Восстанавливаем терминал и снимаем обработчик ──────────────────
   if (isTTY) process.stdout.write(SHOW_CURSOR);
   process.removeListener('SIGINT', onSignal);
 
   // Освобождаем keep-alive сокеты — иначе Node не завершится
-  agent.destroy();
+  destroyAgents();
 
-  // ── 7. Сводка и exit-code ─────────────────────────────────────────────
+  // ── 6. Сводка и exit-code ─────────────────────────────────────────────
   printSummary(results, errors);
   if (errors.length) process.exitCode = EXIT_FATAL;
 }

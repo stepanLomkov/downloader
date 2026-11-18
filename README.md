@@ -67,7 +67,7 @@ src/colors.js      — ANSI и цветовые хелперы
 src/format.js      — форматирование чисел, прогресс-бар
 src/stats.js       — mean / median / min / max
 src/cli.js         — разбор argv
-src/http.js        — keep-alive agent + GET с редиректами
+src/http.js        — keep-alive агенты по протоколу + GET с редиректами
 src/measure.js     — одно измерение
 src/render.js      — печать шапки, строк и сводки
 ```

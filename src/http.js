@@ -1,4 +1,4 @@
-/*
+/**
  * Тонкая обёртка над нативным http/https.
  *
  * Почему не fetch:
@@ -13,21 +13,46 @@ import https from 'node:https';
 import { MAX_REDIRECTS, USER_AGENT } from './config.js';
 
 /**
- * Создаёт keep-alive Agent, соответствующий протоколу URL.
+ * Кэш агентов по протоколу: 'http:' → http.Agent, 'https:' → https.Agent.
  *
- * Зачем keep-alive:
- *   - первый запрос платит DNS + TCP + TLS handshake;
- *   - все последующие переиспользуют уже открытый сокет,
- *     поэтому TTFB «чистых» запросов становится заметно ниже.
- *   - maxSockets: 1 — гарантирует, что запросы идут последовательно
- *     по одному сокету (это же и по смыслу задачи).
+ * Зачем кэш, а не один агент под исходный URL:
+ * редирект может сменить протокол (http → https и наоборот), а агент,
+ * созданный под один протокол, несовместим с модулем другого —
+ * Node бросает ERR_INVALID_PROTOCOL. Держим по агенту на каждый
+ * реально встреченный протокол, создаём лениво.
+ */
+const agents = new Map();
+
+/**
+ * Возвращает keep-alive Agent для указанного протокола.
+ * Создаёт при первом обращении, потом переиспользует.
  *
- * @param {URL} url — целевой адрес
+ * keepAlive: true — переиспользуем сокет между итерациями. Именно это
+ * даёт низкий TTFB у запросов #2..#N: DNS, TCP и TLS handshake платит
+ * только первый запрос. Без keepAlive каждая итерация платила бы
+ * полную цену соединения, и «первый медленнее» бы не наблюдалось.
+ *
+ * @param {'http:'|'https:'} protocol
  * @returns {http.Agent|https.Agent}
  */
-export function createAgent(url) {
-  const opts = { keepAlive: true, maxSockets: 1 };
-  return url.protocol === 'https:' ? new https.Agent(opts) : new http.Agent(opts);
+function getAgent(protocol) {
+  let agent = agents.get(protocol);
+  if (!agent) {
+    const opts = { keepAlive: true };
+    agent = protocol === 'https:' ? new https.Agent(opts) : new http.Agent(opts);
+    agents.set(protocol, agent);
+  }
+  return agent;
+}
+
+/**
+ * Уничтожает все созданные агенты и очищает кэш.
+ * Вызывать один раз в конце программы — иначе keep-alive сокеты
+ * не дадут процессу завершиться (event loop держится за открытые handle).
+ */
+export function destroyAgents() {
+  for (const a of agents.values()) a.destroy();
+  agents.clear();
 }
 
 /**
@@ -37,16 +62,25 @@ export function createAgent(url) {
  *   - ручной разбор редиректов (3xx + Location), максимум MAX_REDIRECTS;
  *   - на «пропущенных» ответах вызываем res.resume(),
  *     иначе сокет не освободится и keep-alive-агент зависнет;
- *   - явный accept-encoding: identity для честных wire-байт.
+ *   - явный accept-encoding: identity для честных wire-байт;
+ *   - агент выбирается под ПРОТОКОЛ ТЕКУЩЕГО url, а не исходного —
+ *     это делает безопасным редирект с изменением протокола;
+ *   - явная проверка протокола на каждом хопе: если редирект увёл
+ *     на ftp://, получим понятную ошибку, а не «Protocol ftp: not supported».
  *
- * @param {URL} url            — целевой адрес
- * @param {http.Agent} agent   — keep-alive агент из createAgent()
+ * @param {URL} url              — целевой адрес
  * @param {number} redirectsLeft — сколько редиректов ещё разрешено
  * @returns {Promise<http.IncomingMessage>}
  */
-export function httpGet(url, agent, redirectsLeft = MAX_REDIRECTS) {
+export function httpGet(url, redirectsLeft = MAX_REDIRECTS) {
   return new Promise((resolve, reject) => {
+    // Явно поддерживаем только http/https — и на первом хопе, и после редиректа
+    if (url.protocol !== 'http:' && url.protocol !== 'https:') {
+      return reject(new Error(`неподдерживаемый протокол: ${url.protocol}`));
+    }
+
     const mod = url.protocol === 'https:' ? https : http;
+    const agent = getAgent(url.protocol); // ← под текущий протокол, не под исходный
 
     const req = mod.get(url, {
       agent,
@@ -62,9 +96,12 @@ export function httpGet(url, agent, redirectsLeft = MAX_REDIRECTS) {
         if (redirectsLeft <= 0) {
           return reject(new Error('слишком много редиректов'));
         }
-        // Location может быть относительным — резолвим относительно текущего URL
+        // Location может быть относительным — резолвим относительно текущего URL.
+        // Если Location — protocol-relative (//host/path) или абсолютный
+        // с другим протоколом, next.protocol будет соответствующим,
+        // и следующий httpGet возьмёт правильный агент.
         const next = new URL(res.headers.location, url);
-        return httpGet(next, agent, redirectsLeft - 1).then(resolve, reject);
+        return httpGet(next, redirectsLeft - 1).then(resolve, reject);
       }
       resolve(res);
     });
